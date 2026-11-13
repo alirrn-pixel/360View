@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
+  <title>360° Panorama - By Ali R. Rahiminia</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; overflow: hidden; background: #000; font-family: system-ui, -apple-system, sans-serif; }
+    #container { width: 100%; height: 100%; }
+    #loading {
+      position: absolute;
+      top: 50%; left: 50%;
+      transform: translate(-50%, -50%);
+      color: #ccc;
+      font-size: 1rem;
+      z-index: 20;
+      text-align: center;
+      max-width: 90%;
+      line-height: 1.4;
+    }
+    #loading.error { color: #f87171; }
+    #ui {
+      position: absolute;
+      bottom: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      display: flex;
+      gap: 10px;
+      z-index: 10;
+      opacity: 0.85;
+      transition: opacity 0.3s;
+    }
+    #ui:hover { opacity: 1; }
+    .btn {
+      background: rgba(30,30,30,0.75);
+      color: #eee;
+      border: 1px solid rgba(255,255,255,0.15);
+      border-radius: 8px;
+      padding: 10px 16px;
+      font-size: 0.9rem;
+      cursor: pointer;
+      backdrop-filter: blur(6px);
+      transition: background 0.2s;
+    }
+    .btn:hover { background: rgba(50,50,50,0.9); }
+    .btn.active { background: #3b82f6; border-color: #3b82f6; }
+  </style>
+</head>
+<body>
+  <div id="loading">Loading panorama…</div>
+  <div id="container"></div>
+
+  <div id="ui" style="display:none;">
+    <button class="btn" id="btn-auto" title="Toggle auto-rotation">Auto-rotate</button>
+    <button class="btn" id="btn-fs" title="Fullscreen">Fullscreen</button>
+  </div>
+
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js"
+    }
+  }
+  </script>
+
+  <script type="module">
+    import * as THREE from 'three';
+
+    // ============================================================
+    //  Get image URL from query parameter  ?url=...  or  ?image=...
+    // ============================================================
+    function getImageUrlFromParams() {
+      const params = new URLSearchParams(window.location.search);
+      // Support both ?url= and ?image=
+      let url = params.get('url') || params.get('image');
+
+      // Also support hash style: #url=...
+      if (!url && window.location.hash) {
+        const hashParams = new URLSearchParams(window.location.hash.substring(1));
+        url = hashParams.get('url') || hashParams.get('image');
+      }
+
+      return url ? decodeURIComponent(url) : null;
+    }
+
+    // Default sample (used only when no parameter is given)
+    const DEFAULT_IMAGE = 'https://raw.githubusercontent.com/mrdoob/three.js/master/examples/textures/2294472375_24a3b8ef46_o.jpg';
+
+    const IMAGE_URL = getImageUrlFromParams() || DEFAULT_IMAGE;
+
+    // ------------------------------------------------------------
+
+    let camera, scene, renderer;
+    let isUserInteracting = false;
+    let onPointerDownMouseX = 0, onPointerDownMouseY = 0;
+    let lon = 0, onPointerDownLon = 0;
+    let lat = 0, onPointerDownLat = 0;
+    let phi = 0, theta = 0;
+    let autoRotate = true;
+
+    const container = document.getElementById('container');
+    const loading = document.getElementById('loading');
+    const ui = document.getElementById('ui');
+    const btnAuto = document.getElementById('btn-auto');
+    const btnFs = document.getElementById('btn-fs');
+
+    function init() {
+      camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 1, 1100);
+      scene = new THREE.Scene();
+
+      const geometry = new THREE.SphereGeometry(500, 60, 40);
+      geometry.scale(-1, 1, 1);
+
+      const textureLoader = new THREE.TextureLoader();
+      textureLoader.load(
+        IMAGE_URL,
+        (texture) => {
+          texture.colorSpace = THREE.SRGBColorSpace;
+          texture.minFilter = THREE.LinearFilter;
+
+          const material = new THREE.MeshBasicMaterial({ map: texture });
+          const mesh = new THREE.Mesh(geometry, material);
+          scene.add(mesh);
+
+          loading.style.display = 'none';
+          ui.style.display = 'flex';
+          btnAuto.classList.add('active');
+        },
+        undefined,
+        (err) => {
+          loading.classList.add('error');
+          loading.innerHTML = 'Failed to load image.<br>Check the URL parameter or CORS settings.';
+          console.error('Texture load error:', err);
+          console.log('Tried to load:', IMAGE_URL);
+        }
+      );
+
+      renderer = new THREE.WebGLRenderer({ antialias: true });
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      renderer.setAnimationLoop(animate);
+      container.appendChild(renderer.domElement);
+
+      container.style.touchAction = 'none';
+      container.addEventListener('pointerdown', onPointerDown);
+      document.addEventListener('wheel', onDocumentMouseWheel, { passive: false });
+      window.addEventListener('resize', onWindowResize);
+
+      btnAuto.addEventListener('click', () => {
+        autoRotate = !autoRotate;
+        btnAuto.classList.toggle('active', autoRotate);
+      });
+
+      btnFs.addEventListener('click', () => {
+        if (!document.fullscreenElement) {
+          document.documentElement.requestFullscreen().catch(() => {});
+        } else {
+          document.exitFullscreen();
+        }
+      });
+    }
+
+    function onWindowResize() {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    }
+
+    function onPointerDown(event) {
+      if (event.isPrimary === false) return;
+      isUserInteracting = true;
+      autoRotate = false;
+      btnAuto.classList.remove('active');
+      onPointerDownMouseX = event.clientX;
+      onPointerDownMouseY = event.clientY;
+      onPointerDownLon = lon;
+      onPointerDownLat = lat;
+      document.addEventListener('pointermove', onPointerMove);
+      document.addEventListener('pointerup', onPointerUp);
+    }
+
+    function onPointerMove(event) {
+      if (event.isPrimary === false) return;
+      lon = (onPointerDownMouseX - event.clientX) * 0.1 + onPointerDownLon;
+      lat = (event.clientY - onPointerDownMouseY) * 0.1 + onPointerDownLat;
+    }
+
+    function onPointerUp() {
+      isUserInteracting = false;
+      document.removeEventListener('pointermove', onPointerMove);
+      document.removeEventListener('pointerup', onPointerUp);
+    }
+
+    function onDocumentMouseWheel(event) {
+      event.preventDefault();
+      const fov = camera.fov + event.deltaY * 0.05;
+      camera.fov = THREE.MathUtils.clamp(fov, 10, 75);
+      camera.updateProjectionMatrix();
+    }
+
+    function animate() {
+      if (autoRotate && !isUserInteracting) {
+        lon += 0.08;
+      }
+
+      lat = Math.max(-85, Math.min(85, lat));
+      phi = THREE.MathUtils.degToRad(90 - lat);
+      theta = THREE.MathUtils.degToRad(lon);
+
+      const x = 500 * Math.sin(phi) * Math.cos(theta);
+      const y = 500 * Math.cos(phi);
+      const z = 500 * Math.sin(phi) * Math.sin(theta);
+
+      camera.lookAt(x, y, z);
+      renderer.render(scene, camera);
+    }
+
+    init();
+  </script>
+</body>
+</html>
